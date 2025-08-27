@@ -7,6 +7,7 @@
  "field_order": [
   "nullrechnungen_unterdruecken",
   "csv_import_button",
+  "tax_account",
   "section_break_pedq",
   "wortmann_rabattwerte_je_kunde",
   "section_break_pzqa",
@@ -55,13 +56,19 @@
    "fieldtype": "Table",
    "label": "Wortmann Importergebnis",
    "options": "Wortmann Importergebnis"
+  },
+  {
+   "fieldname": "tax_account",
+   "fieldtype": "Link",
+   "label": "Tax Account",
+   "options": "Account"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-08-23 13:45:48.459096",
+ "modified": "2025-08-27 14:42:07.366158",
  "modified_by": "Administrator",
  "module": "Csv Import Wortmann",
  "name": "CSV Import Wortmann Settings",
