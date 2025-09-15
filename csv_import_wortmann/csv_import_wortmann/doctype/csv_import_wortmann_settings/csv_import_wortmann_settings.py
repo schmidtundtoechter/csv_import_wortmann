@@ -1,9 +1,6 @@
 # Copyright (c) 2025, ahmad mohammad and contributors
 # For license information, please see license.txt
 # File: csv_import_wortmann/csv_import_wortmann/csv_import_wortmann_settings/csv_import_wortmann_settings.py
-# Copyright (c) 2025, ahmad mohammad and contributors
-# For license information, please see license.txt
-# File: csv_import_wortmann/csv_import_wortmann/csv_import_wortmann_settings/csv_import_wortmann_settings.py
 
 import frappe
 from frappe.model.document import Document
@@ -18,9 +15,11 @@ import re
 class CSVImportWortmannSettings(Document):
     def before_save(self):
         """Validate settings before save"""
-        pass
-        
-        
+        if self.tax_account:
+            # Validate that the tax account exists
+            if not frappe.db.exists("Account", self.tax_account):
+                frappe.throw(f"Tax Account {self.tax_account} does not exist")
+
 @frappe.whitelist()
 def process_csv_import(doc_name, file_content, file_name):
     """Main function to process Wortmann CSV import"""
@@ -205,6 +204,111 @@ def convert_german_number(number_str):
     except:
         return 0.0
 
+def get_currency_mapping():
+    """Currency mapping from CSV values to ERPNext currency codes"""
+    # Mapping for common currencies - add more as needed
+    currency_map = {
+        # Wortmann uses full currency names
+        "Euro": "EUR",
+        "US Dollar": "USD", 
+        "United States Dollar": "USD",
+        "Swiss Franc": "CHF",
+        "Pound Sterling": "GBP",
+        "British Pound": "GBP",
+        "Japanese Yen": "JPY",
+        "Chinese Yuan": "CNY",
+        "Australian Dollar": "AUD",
+        "Canadian Dollar": "CAD",
+        
+        # ISO codes (in case they're used)
+        "EUR": "EUR",
+        "USD": "USD",
+        "CHF": "CHF",
+        "GBP": "GBP",
+        "JPY": "JPY",
+        "CNY": "CNY",
+        "AUD": "AUD",
+        "CAD": "CAD"
+    }
+    return currency_map
+
+def get_company_default_currency():
+    """Get default currency from the current company"""
+    try:
+        # Get the default company
+        company = frappe.defaults.get_user_default("Company")
+        if not company:
+            # Fallback to first company found
+            companies = frappe.get_all("Company", fields=["name"], limit=1)
+            company = companies[0]["name"] if companies else None
+        
+        if company:
+            return frappe.get_cached_value("Company", company, "default_currency") or "EUR"
+        
+        return "EUR"  # Final fallback
+        
+    except Exception as e:
+        frappe.log_error(f"Error getting company default currency: {str(e)}")
+        return "EUR"
+
+def get_invoice_currency(csv_currency):
+    """Get ERPNext currency code from CSV currency value"""
+    try:
+        currency_map = get_currency_mapping()
+        default_company_currency = get_company_default_currency()
+        
+        # Clean the CSV currency value
+        csv_currency = str(csv_currency).strip() if csv_currency else ""
+        
+        # Try to map the currency
+        if csv_currency in currency_map:
+            return currency_map[csv_currency]
+        
+        # If currency exists in ERPNext as-is, use it
+        if frappe.db.exists("Currency", csv_currency):
+            return csv_currency
+            
+        # Fallback to company default currency
+        frappe.log_error(f"Unknown currency '{csv_currency}', using default: {default_company_currency}")
+        return default_company_currency
+        
+    except Exception as e:
+        frappe.log_error(f"Error mapping currency '{csv_currency}': {str(e)}")
+        return get_company_default_currency()
+
+def ensure_currency_exchange_rate(from_currency, to_currency, exchange_date=None):
+    """Ensure currency exchange rate exists, return rate if found"""
+    try:
+        if from_currency == to_currency:
+            # Same currency, no exchange rate needed
+            return 1.0
+            
+        if not exchange_date:
+            exchange_date = today()
+            
+        # Check if exchange rate already exists
+        existing_rate = frappe.get_all('Currency Exchange',
+            filters={
+                'from_currency': from_currency,
+                'to_currency': to_currency,
+                'date': exchange_date
+            },
+            fields=['exchange_rate']
+        )
+        
+        if existing_rate:
+            return existing_rate[0]['exchange_rate']
+        
+        # No exchange rate found - log warning and return None
+        frappe.log_error(f"No exchange rate found for {from_currency} to {to_currency} on {exchange_date}")
+        return None
+        
+    except Exception as e:
+        frappe.log_error(f"Error checking exchange rate {from_currency} to {to_currency}: {str(e)}")
+        return None
+    
+
+    
 def create_app_folder_if_not_exists(app_name):
     """Create folder for app in File doctype if it doesn't exist"""
     try:
@@ -358,7 +462,7 @@ def combine_rows(negative_row, positive_row):
     return combined
 
 def create_wortmann_sales_invoice_safe(customer_nr, customer_rows, settings_doc, errors):
-    """Create sales invoice for Wortmann customer - SAFE VERSION"""
+    """Create sales invoice for Wortmann customer - SAFE VERSION with Currency"""
     
     try:
         # Get customer (already validated to exist)
@@ -367,9 +471,20 @@ def create_wortmann_sales_invoice_safe(customer_nr, customer_rows, settings_doc,
             fields=['name', 'customer_name']
         )[0]
         
+        # Get company default currency
+        company_currency = get_company_default_currency()
+        
+        # Determine invoice currency from first row (assuming all rows have same currency)
+        csv_currency = customer_rows[0].get('Currency', '') if customer_rows else ''
+        invoice_currency = get_invoice_currency(csv_currency)
+        
+        # Ensure exchange rate exists
+        ensure_currency_exchange_rate(invoice_currency, company_currency)
+        
         # Create sales invoice
         invoice = frappe.new_doc('Sales Invoice')
         invoice.customer = customer['name']
+        invoice.currency = invoice_currency  # SET THE CURRENCY
         invoice.posting_date = today()
         invoice.due_date = add_months(today(), 1)
         invoice.update_stock = 0
