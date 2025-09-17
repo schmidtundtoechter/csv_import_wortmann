@@ -308,7 +308,7 @@ def ensure_currency_exchange_rate(from_currency, to_currency, exchange_date=None
         return None
     
 
-    
+
 def create_app_folder_if_not_exists(app_name):
     """Create folder for app in File doctype if it doesn't exist"""
     try:
@@ -461,6 +461,54 @@ def combine_rows(negative_row, positive_row):
     
     return combined
 
+
+def get_conversion_rate(from_currency, to_currency, exchange_date=None):
+    """Get conversion rate from Currency Exchange records"""
+    try:
+        if from_currency == to_currency:
+            return 1.0
+            
+        if not exchange_date:
+            exchange_date = today()
+        
+        # Look for exact exchange rate record
+        exchange_rate = frappe.get_all('Currency Exchange',
+            filters={
+                'from_currency': from_currency,
+                'to_currency': to_currency,
+                'date': exchange_date,
+                'for_selling': 1  # Important: must be enabled for selling
+            },
+            fields=['exchange_rate'],
+            limit=1
+        )
+        
+        if exchange_rate:
+            return flt(exchange_rate[0]['exchange_rate'])
+        
+        # Fallback: try without date filter (get latest)
+        exchange_rate = frappe.get_all('Currency Exchange',
+            filters={
+                'from_currency': from_currency,
+                'to_currency': to_currency,
+                'for_selling': 1
+            },
+            fields=['exchange_rate'],
+            order_by='date desc',
+            limit=1
+        )
+        
+        if exchange_rate:
+            return flt(exchange_rate[0]['exchange_rate'])
+        
+        # Final fallback
+        return 1.0
+        
+    except Exception as e:
+        frappe.log_error(f"Error getting conversion rate {from_currency} to {to_currency}: {str(e)}")
+        return 1.0
+    
+    
 def create_wortmann_sales_invoice_safe(customer_nr, customer_rows, settings_doc, errors):
     """Create sales invoice for Wortmann customer - SAFE VERSION with Currency"""
     
@@ -478,13 +526,16 @@ def create_wortmann_sales_invoice_safe(customer_nr, customer_rows, settings_doc,
         csv_currency = customer_rows[0].get('Currency', '') if customer_rows else ''
         invoice_currency = get_invoice_currency(csv_currency)
         
-        # Ensure exchange rate exists
-        ensure_currency_exchange_rate(invoice_currency, company_currency)
+        # Get conversion rate
+        conversion_rate = get_conversion_rate(invoice_currency, company_currency)
+        
         
         # Create sales invoice
         invoice = frappe.new_doc('Sales Invoice')
         invoice.customer = customer['name']
         invoice.currency = invoice_currency  # SET THE CURRENCY
+        invoice.conversion_rate = conversion_rate  # SET MANUAL CONVERSION RATE
+
         invoice.posting_date = today()
         invoice.due_date = add_months(today(), 1)
         invoice.update_stock = 0
